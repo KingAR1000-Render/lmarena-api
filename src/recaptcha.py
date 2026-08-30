@@ -455,6 +455,7 @@ async def get_recaptcha_v3_token_with_chrome(config: dict) -> Optional[str]:
 
     chrome_path = find_chrome_executable()
     if not chrome_path:
+        _m().debug_print("  ⚠️ No Chrome/Edge executable found; skipping Chrome reCAPTCHA mint.")
         return None
 
     profile_dir = Path(_m().CONFIG_FILE).with_name("chrome_grecaptcha")
@@ -479,17 +480,35 @@ async def get_recaptcha_v3_token_with_chrome(config: dict) -> Optional[str]:
             {"name": "provisional_user_id", "value": provisional_user_id, "domain": ".arena.ai"}
         )
     async with async_playwright() as p:
-        context = await p.chromium.launch_persistent_context(
-            user_data_dir=str(profile_dir),
-            executable_path=chrome_path,
-            headless=False,  # Headful for better reCAPTCHA score/warmup
-            user_agent=user_agent or None,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-first-run",
-                "--no-default-browser-check",
-            ],
-        )
+        # Headful launches get better reCAPTCHA v3 scores, but they fail outright on hosts
+        # without a display server. Fall back to headless instead of giving up.
+        headless_mode = False
+        try:
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                executable_path=chrome_path,
+                headless=headless_mode,
+                user_agent=user_agent or None,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+            )
+        except Exception:
+            _m().debug_print("  ⚠️ Headful Chrome failed to launch; retrying headless...")
+            headless_mode = True
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir=str(profile_dir),
+                executable_path=chrome_path,
+                headless=True,
+                user_agent=user_agent or None,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+            )
         try:
             # Small stealth tweak: reduces bot-detection surface for reCAPTCHA v3 scoring.
             try:
@@ -542,7 +561,7 @@ async def get_recaptcha_v3_token_with_chrome(config: dict) -> Optional[str]:
                 config,
                 mode_key="chrome_fetch_window_mode",
                 marker="LMArenaBridge Chrome Fetch",
-                headless=False,
+                headless=headless_mode,
             )
             await page.goto("https://arena.ai/?mode=direct", wait_until="domcontentloaded", timeout=120000)
 
@@ -804,34 +823,99 @@ async def get_recaptcha_v3_token() -> Optional[str]:
         return None
 
 
-async def refresh_recaptcha_token(force_new: bool = False):
-    """Checks if the global reCAPTCHA token is expired and refreshes it if necessary."""
-    
+# --- In-flight mint deduplication / failure backoff --------------------------
+# Concurrent requests must not each launch their own browser instance to mint a
+# reCAPTCHA token. We share one in-flight mint task and reuse its result; after a
+# failed mint we back off briefly instead of relaunching browsers per request.
+_recaptcha_mint_task: Optional[asyncio.Task] = None
+
+
+def _recaptcha_mint_failure_backoff_seconds() -> float:
+    try:
+        cfg = _m().get_config() or {}
+        value = float(cfg.get("recaptcha_mint_failure_backoff_seconds", 30.0))
+    except Exception:
+        value = 30.0
+    return max(5.0, min(value, 300.0))
+
+
+async def _mint_and_cache_recaptcha_token() -> Optional[str]:
+    """Run one side-channel browser mint and update the global token cache."""
+    new_token = await get_recaptcha_v3_token()
+    now = datetime.now(timezone.utc)
+    if new_token:
+        _m().RECAPTCHA_TOKEN = new_token
+        _m().RECAPTCHA_EXPIRY = now + timedelta(seconds=110)
+        _m().debug_print(f"✅ Recaptcha token refreshed, expires at {_m().RECAPTCHA_EXPIRY.isoformat()}")
+        return new_token
+    _m().debug_print("❌ Failed to refresh recaptcha token.")
+    _m().RECAPTCHA_TOKEN = None
+    # Back off so a blocked bridge doesn't relaunch browsers on every single request.
+    _m().RECAPTCHA_EXPIRY = now + timedelta(seconds=_recaptcha_mint_failure_backoff_seconds())
+    return None
+
+
+def _get_or_start_recaptcha_mint_task() -> asyncio.Task:
+    """Return the current in-flight mint task, or start a new one."""
+    global _recaptcha_mint_task
+    if _recaptcha_mint_task is not None and not _recaptcha_mint_task.done():
+        return _recaptcha_mint_task
+    _recaptcha_mint_task = asyncio.create_task(_mint_and_cache_recaptcha_token())
+    return _recaptcha_mint_task
+
+
+async def refresh_recaptcha_token(force_new: bool = False, wait_timeout: Optional[float] = None):
+    """
+    Return a usable reCAPTCHA v3 token, minting one via the side-channel browser flow if needed.
+
+    - Concurrent callers share a single in-flight mint task (no parallel browser launches).
+    - After a failed mint we back off for a short window instead of relaunching browsers on
+      every request.
+    - `wait_timeout` bounds how long a caller waits; when it elapses the mint keeps running in
+      the background and its result is cached for subsequent callers.
+    """
     current_time = datetime.now(timezone.utc)
     if force_new:
         _m().RECAPTCHA_TOKEN = None
         _m().RECAPTCHA_EXPIRY = current_time - timedelta(days=365)
+
     # Unit tests should never launch real browser automation. Tests that need a token patch
     # `refresh_recaptcha_token` / `get_recaptcha_v3_token` explicitly.
     if os.environ.get("PYTEST_CURRENT_TEST"):
         return get_cached_recaptcha_token() or None
-    # Check if token is expired (set a refresh margin of 10 seconds)
-    if _m().RECAPTCHA_TOKEN is None or current_time > _m().RECAPTCHA_EXPIRY - timedelta(seconds=10):
-        _m().debug_print("🔄 Recaptcha token expired or missing. Refreshing...")
-        new_token = await get_recaptcha_v3_token()
-        if new_token:
-            _m().RECAPTCHA_TOKEN = new_token
-            # reCAPTCHA v3 tokens typically last 120 seconds (2 minutes)
-            _m().RECAPTCHA_EXPIRY = current_time + timedelta(seconds=120)
-            _m().debug_print(f"✅ Recaptcha token refreshed, expires at {_m().RECAPTCHA_EXPIRY.isoformat()}")
-            return new_token
-        else:
-            _m().debug_print("❌ Failed to refresh recaptcha token.")
-            # Set a short retry delay if refresh fails
-            _m().RECAPTCHA_EXPIRY = current_time + timedelta(seconds=10)
+
+    cached = get_cached_recaptcha_token()
+    if cached and not force_new:
+        return cached
+
+    # Failure backoff: if the last mint failed recently, don't relaunch browsers yet.
+    if (
+        not force_new
+        and _m().RECAPTCHA_TOKEN is None
+        and current_time < _m().RECAPTCHA_EXPIRY
+    ):
+        _m().debug_print("⏳ Skipping reCAPTCHA mint (recent failure backoff active).")
+        return None
+
+    _m().debug_print("🔄 Recaptcha token expired or missing. Refreshing...")
+    try:
+        task = _get_or_start_recaptcha_mint_task()
+    except RuntimeError:
+        # No running event loop (e.g. unusual sync caller): mint inline.
+        return await _mint_and_cache_recaptcha_token()
+
+    if wait_timeout is not None:
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=wait_timeout)
+        except asyncio.TimeoutError:
+            _m().debug_print("⏳ reCAPTCHA mint still in progress; continuing without a token (result will be cached).")
             return None
-    
-    return _m().RECAPTCHA_TOKEN
+
+    try:
+        return await task
+    except Exception as e:
+        _m().debug_print(f"❌ reCAPTCHA mint task failed: {type(e).__name__}: {e}")
+        return None
 
 
 def get_cached_recaptcha_token() -> str:
