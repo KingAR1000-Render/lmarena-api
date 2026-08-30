@@ -215,6 +215,7 @@ Then use `http://localhost:8000/api/v1` as the API base URL.
 - **401 from this service:** include `Authorization: Bearer ...` and ensure it exactly matches Render's `API_KEY`.
 - **Upstream 401:** replace the expired `AUTH_TOKEN` in Render and redeploy.
 - **403/reCAPTCHA or Cloudflare errors:** retry later, open the dashboard and refresh tokens/models, or use a valid Arena token. Shared hosting IPs can remain blocked.
+- **"Failed to acquire reCAPTCHA token" (503):** the bridge's side-channel browser mint (Chrome/Camoufox) couldn't produce a token, typically because the host IP is blocked or no browser/display is available. Since recent builds the bridge no longer hard-fails before sending the request: it proceeds without a token, retries with a fresh mint on upstream 403s, and falls back to headless Chrome when no display server exists. You can tune the wait with `recaptcha_mint_wait_seconds` (default 30s) and the retry backoff with `recaptcha_mint_failure_backoff_seconds` (default 30s) in `config.json`. If it persists, the server IP is likely blocked by Cloudflare/Google and you should deploy elsewhere.
 - **429:** respect `Retry-After`, lower request frequency, or wait for the upstream limit to reset.
 - **No models / degraded health:** allow startup discovery to finish, inspect Render logs, and use the dashboard's refresh action.
 - **Container killed or browser launch fails:** this commonly indicates free-tier memory pressure. Reduce concurrency or upgrade the Render instance.

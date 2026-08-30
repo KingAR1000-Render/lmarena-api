@@ -2439,14 +2439,26 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
             if stream:
                 recaptcha_token = ""
             else:
-                recaptcha_token = await refresh_recaptcha_token(force_new=False)
-                if not recaptcha_token:
-                    debug_print("❌ Cannot proceed, failed to get reCAPTCHA token.")
-                    raise HTTPException(
-                        status_code=503,
-                        detail="Service Unavailable: Failed to acquire reCAPTCHA token. The bridge server may be blocked."
-                    )
-                debug_print(f"🔑 Using reCAPTCHA v3 token: {recaptcha_token[:20]}...")
+                # Best-effort acquisition. The side-channel browser mint can be slow or fail outright
+                # (no browser on this host, IP blocked by Cloudflare/Google, etc.). Instead of
+                # hard-failing with a 503 before the request is even attempted, bound the wait and
+                # proceed without a token if minting hasn't finished: the retry loop below forces a
+                # fresh token on 403 "recaptcha validation failed", and browser transports mint
+                # in-page when available.
+                try:
+                    recaptcha_mint_wait = float(get_config().get("recaptcha_mint_wait_seconds", 30.0))
+                except Exception:
+                    recaptcha_mint_wait = 30.0
+                recaptcha_mint_wait = max(5.0, min(recaptcha_mint_wait, 120.0))
+                recaptcha_token = await refresh_recaptcha_token(
+                    force_new=False,
+                    wait_timeout=recaptcha_mint_wait,
+                )
+                if recaptcha_token:
+                    debug_print(f"🔑 Using reCAPTCHA v3 token: {recaptcha_token[:20]}...")
+                else:
+                    debug_print("⚠️ No reCAPTCHA v3 token yet (mint in progress or blocked). "
+                                "Proceeding without one; retries will force a fresh token on 403.")
         # -----------------------------------------------
         
         # Generate conversation ID from context (API key + model + first user message)
@@ -2688,9 +2700,22 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
 
                 except (requests.exceptions.HTTPError, _cs.exceptions.CloudflareException) as e:
                     status_code = getattr(getattr(e, 'response', None), 'status_code', None)
-                    if status_code and status_code not in [429, 401]:
-                        raise
-                    if attempt == max_retries - 1:
+                    if attempt == max_retries - 1 or (status_code and status_code not in [429, 401]):
+                        if status_code == 429:
+                            raise HTTPException(
+                                status_code=503,
+                                detail="Service Unavailable: LMArena rate limited the request (429 Too Many Requests) after all retries. Please retry later.",
+                            )
+                        if status_code == 401:
+                            raise HTTPException(
+                                status_code=503,
+                                detail="Service Unavailable: LMArena rejected the auth token (401 Unauthorized) after all retries. The configured Arena auth token may be invalid or expired.",
+                            )
+                        if status_code == 403:
+                            raise HTTPException(
+                                status_code=503,
+                                detail="Service Unavailable: LMArena rejected the request (403). This usually means the reCAPTCHA token was missing or invalid — the bridge server may be blocked, or the auth token may be invalid. Retry, or refresh tokens in the dashboard.",
+                            )
                         raise
 
             raise HTTPException(status_code=503, detail="Max retries exceeded")
