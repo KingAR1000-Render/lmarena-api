@@ -72,7 +72,7 @@ def _apply_config_defaults(config: dict) -> None:
     
     # Environment variable overrides (useful for Hugging Face Secrets / Cloud hosting)
     env_token = os.environ.get("AUTH_TOKEN") or os.environ.get("ARENA_AUTH_TOKEN")
-    if env_token and not config.get("auth_tokens"):
+    if env_token:
         config["auth_token"] = env_token.strip()
         config["auth_tokens"] = [env_token.strip()]
     
@@ -80,13 +80,20 @@ def _apply_config_defaults(config: dict) -> None:
     if env_password:
         config["password"] = env_password.strip()
         
+    # Environment configuration is authoritative. This is important on hosts such
+    # as Render, where secrets must not be committed to config.json and the disk is
+    # ephemeral on the free plan.
     env_api_key = os.environ.get("API_KEY")
-    if env_api_key and not config.get("api_keys"):
+    if env_api_key:
+        try:
+            env_api_rpm = max(1, min(int(os.environ.get("API_RPM", "120")), 1000))
+        except (TypeError, ValueError):
+            env_api_rpm = 120
         config["api_keys"] = [{
-            "name": "Cloud Key",
+            "name": "Environment Key",
             "key": env_api_key.strip(),
-            "rpm": 120,
-            "created": 1788002500
+            "rpm": env_api_rpm,
+            "created": 0,
         }]
     
     # Normalize api_keys
