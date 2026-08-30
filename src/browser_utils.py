@@ -387,7 +387,7 @@ async def _cancel_background_task(task: Optional["asyncio.Task"], *, timeout_sec
     task.cancel()
     try:
         await asyncio.wait_for(task, timeout=float(timeout_seconds))
-    except Exception:
+    except (Exception, asyncio.CancelledError):
         pass
 
     if task.done():

@@ -207,6 +207,7 @@ print = safe_print  # type: ignore[assignment]
 def debug_print(*args, **kwargs):
     """Print debug messages only if DEBUG is True"""
     if DEBUG:
+        kwargs.setdefault("flush", True)
         print(*args, **kwargs)
 
 
@@ -1085,8 +1086,12 @@ async def startup_event():
         load_usage_stats()
         
         # 1. First, get initial data (cookies, models, etc.)
-        # We await this so we have the cookie BEFORE trying reCAPTCHA
-        await get_initial_data() 
+        models = get_models()
+        if models:
+            debug_print(f"📦 Loaded {len(models)} models from models.json (fast startup)")
+            asyncio.create_task(get_initial_data())
+        else:
+            await get_initial_data() 
 
         # Best-effort: if the user-configured auth cookies are expired base64 sessions, try to refresh one so the
         # Camoufox proxy worker can start with a valid `arena-auth-prod-v1` cookie.
@@ -2502,8 +2507,9 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
              
             payload = {
                 "id": session_id,
-                "mode": "direct",
+                "mode": "battle",
                 "modelAId": model_id,
+                "modelBId": model_id,
                 "userMessageId": user_msg_id,
                 "modelAMessageId": model_msg_id,
                 "modelBMessageId": model_b_msg_id,
@@ -2735,7 +2741,7 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
                 use_browser_transports = (
                     force_browser_transports_in_stream
                     or (model_public_name in STRICT_BROWSER_FETCH_MODELS)
-                    or proxy_active_at_start
+                    or (proxy_active_at_start and not current_token)
                 )
                 prefer_chrome_transport = False
                 if use_browser_transports and (model_public_name in STRICT_BROWSER_FETCH_MODELS):
@@ -3746,8 +3752,8 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
                                     if not line:
                                         continue
                                     
-                                    # Parse thinking/reasoning chunks: ag:"thinking text"
-                                    if line.startswith("ag:"):
+                                    # Parse thinking/reasoning chunks: ag:"thinking text" or bg:"thinking text"
+                                    if line.startswith("ag:") or line.startswith("bg:"):
                                         chunk_data = line[3:]
                                         try:
                                             reasoning_chunk = json.loads(chunk_data)
@@ -3772,8 +3778,8 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
                                         except json.JSONDecodeError:
                                             continue
                                     
-                                    # Parse text chunks: a0:"Hello "
-                                    elif line.startswith("a0:"):
+                                    # Parse text chunks: a0:"Hello " or b0:"Hello "
+                                    elif line.startswith("a0:") or line.startswith("b0:"):
                                         chunk_data = line[3:]
                                         try:
                                             text_chunk = json.loads(chunk_data)
@@ -3798,34 +3804,33 @@ async def api_chat_completions(request: Request, api_key: dict = Depends(rate_li
                                         except json.JSONDecodeError:
                                             continue
                                     
-                                    # Parse image generation: a2:[{...}] (for image models)
-                                    elif line.startswith("a2:"):
+                                    # Parse image generation: a2:[{...}] or b2:[{...}] (for image models)
+                                    elif line.startswith("a2:") or line.startswith("b2:"):
                                         image_data = line[3:]
                                         try:
                                             image_list = json.loads(image_data)
-                                            # OpenAI format: return URL in content
                                             if isinstance(image_list, list) and len(image_list) > 0:
-                                                image_obj = image_list[0]
-                                                if image_obj.get('type') == 'image':
-                                                    image_url = image_obj.get('image', '')
-                                                    # Format as markdown for streaming
-                                                    response_text = f"![Generated Image]({image_url})"
-                                                    
-                                                    # Send the markdown-formatted image in a chunk
-                                                    chunk_response = {
-                                                        "id": chunk_id,
-                                                        "object": "chat.completion.chunk",
-                                                        "created": int(time.time()),
-                                                        "model": model_public_name,
-                                                        "choices": [{
-                                                            "index": 0,
-                                                            "delta": {
-                                                                "content": response_text
-                                                            },
-                                                            "finish_reason": None
-                                                        }]
-                                                    }
-                                                    yield f"data: {json.dumps(chunk_response)}\n\n"
+                                                for image_obj in image_list:
+                                                    if isinstance(image_obj, dict) and image_obj.get('type') == 'image':
+                                                        image_url = image_obj.get('image', '')
+                                                        if image_url:
+                                                            md_img = f"![Generated Image]({image_url})"
+                                                            response_text += ("\n" + md_img if response_text else md_img)
+                                                            
+                                                            chunk_response = {
+                                                                "id": chunk_id,
+                                                                "object": "chat.completion.chunk",
+                                                                "created": int(time.time()),
+                                                                "model": model_public_name,
+                                                                "choices": [{
+                                                                    "index": 0,
+                                                                    "delta": {
+                                                                        "content": md_img
+                                                                    },
+                                                                    "finish_reason": None
+                                                                }]
+                                                            }
+                                                            yield f"data: {json.dumps(chunk_response)}\n\n"
                                         except json.JSONDecodeError:
                                             pass
                                     

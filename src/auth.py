@@ -219,8 +219,10 @@ def get_request_headers_with_token(token: str, recaptcha_v3_token: Optional[str]
     _add_cookie("cf_clearance", cf_clearance)
     _add_cookie("__cf_bm", cf_bm)
     _add_cookie("_cfuvid", cfuvid)
-    _add_cookie("provisional_user_id", provisional_user_id)
     _add_cookie("arena-auth-prod-v1", token)
+    if len(token) > 3000:
+        _add_cookie("arena-auth-prod-v1.0", token[:3200])
+        _add_cookie("arena-auth-prod-v1.1", token[3200:])
 
     headers: dict[str, str] = {
         "Content-Type": "text/plain;charset=UTF-8",
@@ -879,6 +881,9 @@ def get_next_auth_token(exclude_tokens: set = None, *, allow_ephemeral_fallback:
             token = str(cookie_store.get("arena-auth-prod-v1") or "").strip()
             if token and not is_arena_auth_token_expired(token):
                 auth_tokens = [token]
+                if bool(config.get("persist_arena_auth_cookie")):
+                    config["auth_tokens"] = [token]
+                    _m().save_config(config, preserve_auth_tokens=False)
                 _m().debug_print("🔑 Using arena-auth cookie from browser session (browser_cookies).")
     if not auth_tokens:
         raise HTTPException(status_code=500, detail="No auth tokens configured")

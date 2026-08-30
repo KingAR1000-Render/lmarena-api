@@ -70,6 +70,25 @@ def _apply_config_defaults(config: dict) -> None:
     config.setdefault("camoufox_fetch_window_mode", constants.DEFAULT_CAMOUFOX_FETCH_WINDOW_MODE)
     config.setdefault("chrome_fetch_window_mode", constants.DEFAULT_CHROME_FETCH_WINDOW_MODE)
     
+    # Environment variable overrides (useful for Hugging Face Secrets / Cloud hosting)
+    env_token = os.environ.get("AUTH_TOKEN") or os.environ.get("ARENA_AUTH_TOKEN")
+    if env_token and not config.get("auth_tokens"):
+        config["auth_token"] = env_token.strip()
+        config["auth_tokens"] = [env_token.strip()]
+    
+    env_password = os.environ.get("ADMIN_PASSWORD")
+    if env_password:
+        config["password"] = env_password.strip()
+        
+    env_api_key = os.environ.get("API_KEY")
+    if env_api_key and not config.get("api_keys"):
+        config["api_keys"] = [{
+            "name": "Cloud Key",
+            "key": env_api_key.strip(),
+            "rpm": 120,
+            "created": 1788002500
+        }]
+    
     # Normalize api_keys
     if isinstance(config.get("api_keys"), list):
         normalized_keys = []

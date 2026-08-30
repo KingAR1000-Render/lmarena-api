@@ -1,9 +1,13 @@
+.venv/
 venv/
 *webui_secret_key
 *cache_ggshield
-config.json
 .pytest_cache/
 __pycache__/
 chrome_grecaptcha/
 grecaptcha/
 camoufox_fetch/
+generated_images/
+debug_*.py
+extract_supabase_key.py
+test_image_models*.py

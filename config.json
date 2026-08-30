@@ -1,0 +1,27 @@
+{
+    "browser_cookies": {},
+    "user_agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:152.0) Gecko/20100101 Firefox/152.0",
+    "usage_stats": {},
+    "password": "admin",
+    "auth_token": "",
+    "auth_tokens": [],
+    "cf_clearance": "",
+    "api_keys": [
+        {
+            "name": "Default Key",
+            "key": "sk-lmab-your-api-key-here",
+            "rpm": 120,
+            "created": 0
+        }
+    ],
+    "prune_invalid_tokens": false,
+    "persist_arena_auth_cookie": true,
+    "camoufox_proxy_window_mode": "minimize",
+    "camoufox_fetch_window_mode": "minimize",
+    "chrome_fetch_window_mode": "minimize",
+    "cf_bm": "",
+    "provisional_user_id": "",
+    "recaptcha_sitekey": "6LeTGMcsAAAAALuIlkVwIxaAuZA8VledA6d3Nnb0",
+    "next_action_upload": "709ff3f9203887bb0aca9151c2b5d29d256ba9fca4",
+    "next_action_signed_url": "6026fe7da7fa40f4b062d5a98a494051342f550dec"
+}

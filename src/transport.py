@@ -440,9 +440,7 @@ def _arena_origin_candidates(url: Optional[str] = None) -> list[str]:
 
 def _arena_auth_cookie_specs(token: str, *, page_url: Optional[str] = None) -> list[dict]:
     """
-    Build host-only `arena-auth-prod-v1` cookie specs for both arena.ai and lmarena.ai.
-
-    Using `url` (instead of `domain`) more closely matches how the site stores this cookie (host-only).
+    Build host-only and domain `arena-auth-prod-v1` cookie specs for both arena.ai and lmarena.ai.
     """
     value = str(token or "").strip()
     if not value:
@@ -450,6 +448,14 @@ def _arena_auth_cookie_specs(token: str, *, page_url: Optional[str] = None) -> l
     specs: list[dict] = []
     for origin in _arena_origin_candidates(page_url):
         specs.append({"name": "arena-auth-prod-v1", "value": value, "url": origin, "path": "/"})
+        if len(value) > 3000:
+            specs.append({"name": "arena-auth-prod-v1.0", "value": value[:3200], "url": origin, "path": "/"})
+            specs.append({"name": "arena-auth-prod-v1.1", "value": value[3200:], "url": origin, "path": "/"})
+    for domain in (".lmarena.ai", ".arena.ai"):
+        specs.append({"name": "arena-auth-prod-v1", "value": value, "domain": domain})
+        if len(value) > 3000:
+            specs.append({"name": "arena-auth-prod-v1.0", "value": value[:3200], "domain": domain})
+            specs.append({"name": "arena-auth-prod-v1.1", "value": value[3200:], "domain": domain})
     return specs
 
 
@@ -972,27 +978,25 @@ async def fetch_lmarena_stream_via_chrome(
                 if fetch_task.done() and meta is None:
                     # Give a brief moment for meta chunk to arrive in the queue (race condition)
                     try:
-                        # Check if there's anything in the queue that might be the meta chunk
                         try:
                             item = lines_queue.get_nowait()
                             if isinstance(item, str) and item.startswith('{"__type":"meta"'):
                                 meta = json.loads(item)
                             else:
-                                # Put it back and use default meta
                                 await lines_queue.put(item)
                                 meta = {"status": 200, "headers": {}}
                         except asyncio.QueueEmpty:
-                            # No items in queue, use default successful response
-                            meta = {"status": 200, "headers": {}}
+                            try:
+                                res = fetch_task.result()
+                                if isinstance(res, dict):
+                                    result = res
+                                else:
+                                    meta = {"status": 200, "headers": {}}
+                            except Exception:
+                                meta = {"status": 200, "headers": {}}
                         
-                        if meta:
+                        if not result.get("status") and meta:
                             result = meta
-                        else:
-                            res = fetch_task.result()
-                            if isinstance(res, dict) and not res.get("__streaming"):
-                                result = res
-                            else:
-                                result = {"status": 502, "text": "FETCH_DONE_WITHOUT_META"}
                     except Exception as e:
                         result = {"status": 502, "text": f"FETCH_EXCEPTION: {e}"}
                 elif meta:
@@ -1481,7 +1485,7 @@ async def fetch_lmarena_stream_via_camoufox(
                 try:
                     await page.wait_for_function(
                         "() => { const w = window.wrappedJSObject || window; return !!(w.grecaptcha && w.grecaptcha.enterprise && typeof w.grecaptcha.enterprise.render === 'function'); }",
-                        timeout=60000,
+                        timeout=5000,
                     )
                 except Exception:
                     return None
@@ -1496,7 +1500,7 @@ async def fetch_lmarena_stream_via_camoufox(
                         const el = w.document.createElement('div');
                         el.style.cssText = 'position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;';
                         w.document.body.appendChild(el);
-                        const timer = w.setTimeout(() => done(reject, 'V2_TIMEOUT'), 60000);
+                        const timer = w.setTimeout(() => done(reject, 'V2_TIMEOUT'), 5000);
                         const wid = g.render(el, {{
                             sitekey: {json.dumps(_m().RECAPTCHA_V2_SITEKEY)},
                             size: 'invisible',
