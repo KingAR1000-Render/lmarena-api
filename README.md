@@ -42,7 +42,7 @@ An auth token is optional because the bridge can attempt anonymous browser signu
 2. Select **New → Blueprint**.
 3. Select your fork/repository. Render detects `render.yaml`.
 4. Confirm that the service type is **Web Service**, runtime is **Docker**, and plan is **Free**.
-5. Render will generate `ADMIN_PASSWORD` and `API_KEY`. Enter `AUTH_TOKEN` when prompted, or leave it empty to try anonymous operation.
+5. Render will generate `ADMIN_PASSWORD` and `API_KEY`. Enter `AUTH_TOKEN` and, optionally, `CF_CLEARANCE` (a fallback Cloudflare cookie) when prompted, or leave them empty to try anonymous operation.
 6. Apply the Blueprint and wait for the Docker build and deployment to finish.
 7. In the service's **Environment** page, reveal/copy the generated `ADMIN_PASSWORD` and `API_KEY`; store them in a password manager.
 8. Open `https://YOUR-SERVICE.onrender.com/api/v1/health`. A `healthy` or `degraded` JSON response confirms that the web server is reachable. `degraded` during startup can mean models or Cloudflare cookies have not been refreshed yet.
@@ -71,6 +71,7 @@ Add these environment variables under **Environment**:
 | `API_KEY` | Yes | Secret used in the Bearer authorization header. It overrides keys in `config.json`. |
 | `API_RPM` | No | Per-key requests per minute, from 1 to 1000. Default is `120`; the Blueprint uses `60`. |
 | `AUTH_TOKEN` | Recommended | Value of an `arena-auth-prod-v1` cookie. It overrides auth tokens in `config.json`. `ARENA_AUTH_TOKEN` is accepted as an alias. |
+| `CF_CLEARANCE` | No | Fallback value for the Cloudflare `cf_clearance` cookie. Used only when the browser-based Cloudflare challenge could not fetch one and none is stored in `config.json`; a freshly fetched cookie takes priority. Never written back to `config.json`. |
 | `PYTHONUNBUFFERED` | No | Set to `1` for immediate Python logs; already present in the Blueprint/image. |
 
 Mark secret values as secret in Render. After changing a variable, deploy/restart the service so the new value is loaded.
@@ -79,7 +80,7 @@ Mark secret values as secret in Render. After changing a variable, deploy/restar
 
 - The service may spin down after inactivity. The first request after sleep can take longer while Render starts the container and the browser initializes.
 - Free instances have limited memory and CPU. Browser automation is resource-intensive, so concurrent requests, strict models, or image workflows can fail under memory pressure. Reduce traffic/RPM or move to a larger instance if this occurs.
-- The free web service filesystem is ephemeral. Dashboard edits, generated API keys, refreshed cookies, usage statistics, and other changes written to `config.json` can disappear after a restart or redeploy. Keep `ADMIN_PASSWORD`, `API_KEY`, and `AUTH_TOKEN` in Render environment variables; those are reapplied on every boot.
+- The free web service filesystem is ephemeral. Dashboard edits, generated API keys, refreshed cookies, usage statistics, and other changes written to `config.json` can disappear after a restart or redeploy. Keep `ADMIN_PASSWORD`, `API_KEY`, `AUTH_TOKEN`, and (when needed) `CF_CLEARANCE` in Render environment variables; those are reapplied on every boot.
 - Do not add a Render persistent disk merely to expose secrets. If you choose a paid persistent disk, mount and configuration paths need additional application changes; this repository uses its working directory by default.
 - Render's outbound IP addresses are shared/dynamic on free services. LMArena or Cloudflare may challenge or rate-limit them. A successful deployment does not guarantee that every upstream model will work.
 
@@ -203,6 +204,7 @@ docker run --rm -p 8000:8000 \
   -e ADMIN_PASSWORD='replace-me' \
   -e API_KEY='sk-lmab-replace-me' \
   -e AUTH_TOKEN='optional-arena-cookie-value' \
+  -e CF_CLEARANCE='optional-fallback-cf-clearance-cookie' \
   lmarena-bridge
 ```
 

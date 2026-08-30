@@ -29,6 +29,38 @@ def set_config_file(path: str) -> None:
         _current_token_index = 0
 
 
+def get_env_cf_clearance() -> str:
+    """Return the `CF_CLEARANCE` environment variable value (stripped), or ""."""
+    return str(os.environ.get("CF_CLEARANCE") or "").strip()
+
+
+def scrub_env_provided_cf_clearance(config: dict, config_path: str) -> dict:
+    """
+    Return a copy of `config` that never persists an env-provided cf_clearance.
+
+    `CF_CLEARANCE` is a deployment secret (like `API_KEY`/`AUTH_TOKEN`) so it must
+    not be written into config.json. If the in-memory value equals the env value,
+    fall back to whatever cf_clearance is already on disk (usually "" when the
+    browser-based fetch failed). Any other (browser-fetched) value is kept as-is.
+    """
+    env_cf = get_env_cf_clearance()
+    if not env_cf:
+        return config
+    if str(config.get("cf_clearance") or "").strip() != env_cf:
+        return config
+    on_disk_cf = ""
+    try:
+        with open(config_path, "r") as f:
+            on_disk = json.load(f)
+        if isinstance(on_disk, dict):
+            on_disk_cf = str(on_disk.get("cf_clearance") or "")
+    except Exception:
+        pass
+    scrubbed = dict(config)
+    scrubbed["cf_clearance"] = on_disk_cf
+    return scrubbed
+
+
 def get_config() -> dict:
     """
     Load configuration from file with defaults.
@@ -79,7 +111,17 @@ def _apply_config_defaults(config: dict) -> None:
     env_password = os.environ.get("ADMIN_PASSWORD")
     if env_password:
         config["password"] = env_password.strip()
-        
+
+    # Optional cf_clearance fallback for hosts where the browser-based Cloudflare
+    # challenge cannot obtain a cf_clearance cookie. A cookie captured by the
+    # browser (stored in config.json) takes priority; the env value is only used
+    # when no cf_clearance is configured, and is never written back to config.json
+    # (see save_config / scrub_env_provided_cf_clearance).
+    if not str(config.get("cf_clearance") or "").strip():
+        env_cf_clearance = get_env_cf_clearance()
+        if env_cf_clearance:
+            config["cf_clearance"] = env_cf_clearance
+
     # Environment configuration is authoritative. This is important on hosts such
     # as Render, where secrets must not be committed to config.json and the disk is
     # ephemeral on the free plan.
@@ -136,10 +178,11 @@ def save_config(config: dict, *, preserve_auth_tokens: bool = True) -> None:
                     config["auth_token"] = str(on_disk.get("auth_token") or "")
 
         # usage_stats will be set by the caller
-        
+
+        payload = scrub_env_provided_cf_clearance(config, _current_config_file)
         tmp_path = f"{_current_config_file}.tmp"
         with open(tmp_path, "w") as f:
-            json.dump(config, f, indent=4)
+            json.dump(payload, f, indent=4)
         os.replace(tmp_path, _current_config_file)
     except Exception as e:
         print(f"Error saving config: {e}")

@@ -15,5 +15,7 @@ services:
         value: "60"
       - key: AUTH_TOKEN
         sync: false
+      - key: CF_CLEARANCE
+        sync: false
       - key: PYTHONUNBUFFERED
         value: "1"
