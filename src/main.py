@@ -723,9 +723,11 @@ def save_config(config, *, preserve_auth_tokens: bool = True):
 
         # Persist in-memory stats to the config dict before saving
         config["usage_stats"] = dict(model_usage_stats)
+        # Never write an env-provided CF_CLEARANCE secret into config.json.
+        payload = _config_module.scrub_env_provided_cf_clearance(config, CONFIG_FILE)
         tmp_path = f"{CONFIG_FILE}.tmp"
         with open(tmp_path, "w") as f:
-            json.dump(config, f, indent=4)
+            json.dump(payload, f, indent=4)
         os.replace(tmp_path, CONFIG_FILE)
     except Exception as e:
         debug_print(f"❌ Error saving config: {e}")
