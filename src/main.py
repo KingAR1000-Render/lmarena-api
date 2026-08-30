@@ -774,9 +774,10 @@ async def rate_limit_api_key(key: str = Depends(API_KEY_HEADER)):
     if not api_keys:
         return {"key": "anonymous", "name": "Anonymous", "rpm": 9999}
 
-    # If keys are configured but none provided, use first available key
+    # A configured key must be supplied. Falling back to the first key would make
+    # an internet-facing deployment effectively unauthenticated.
     if not api_key_str:
-        api_key_str = api_keys[0]["key"]
+        raise HTTPException(status_code=401, detail="Missing API Key. Use Authorization: Bearer <key>.")
 
     key_data = next((k for k in api_keys if k["key"] == api_key_str), None)
     if not key_data:

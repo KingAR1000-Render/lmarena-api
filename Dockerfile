@@ -44,8 +44,9 @@ COPY --chown=user:user requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Download Camoufox browser binaries
-RUN python -m camoufox fetch
+# Download Camoufox browser binaries. HOME points at the runtime user's home;
+# give that user ownership so browser startup also works on Render.
+RUN python -m camoufox fetch && chown -R user:user /home/user
 
 # Copy project files
 COPY --chown=user:user . .

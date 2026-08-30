@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: lmarena-bridge-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: API_KEY
+        generateValue: true
+      - key: API_RPM
+        value: "60"
+      - key: AUTH_TOKEN
+        sync: false
+      - key: PYTHONUNBUFFERED
+        value: "1"
